@@ -92,7 +92,7 @@ function App() {
           </div>
 
           {/* Konten Halaman yang Berubah */}
-          <main className="flex-grow w-full rounded-tl-3xl px-4 py-6 lg:px-8 bg-base-200-crm">
+          <main className="flex-grow border border-base-300-crm w-full rounded-tl-3xl px-4 py-6 lg:px-8 bg-base-200-crm">
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/inventory" element={<InventoryPage />} />

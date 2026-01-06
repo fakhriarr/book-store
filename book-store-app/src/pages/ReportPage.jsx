@@ -2,9 +2,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell } from 'recharts';
-import { FileText, Table2 } from 'lucide-react';
+import { FileText, Table2, Sparkles, Package, BookOpen, AlertCircle, Loader2, ChevronDown, Check, CircleCheck } from 'lucide-react';
+
 
 const API_REPORT_URL = 'http://localhost:5000/api/reports';
+
 
 // Util
 const formatRupiah = (number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(number || 0);
@@ -82,6 +84,319 @@ const CategoryChart = ({ data, totalRevenue }) => {
   );
 };
 
+// ========== KOMPONEN: Bundling Accordion Item ==========
+const BundlingAccordionItem = ({ bundle, type, isMarked, onToggleMark }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const contentRef = React.useRef(null);
+  const [contentHeight, setContentHeight] = useState(0);
+
+  // Update content height when expanded
+  useEffect(() => {
+    if (contentRef.current) {
+      setContentHeight(contentRef.current.scrollHeight);
+    }
+  }, [isExpanded, bundle]);
+  
+  // Generate title untuk accordion
+  const items = [...bundle.antecedent, ...bundle.consequent];
+  const title = type === 'book' 
+    ? `Bundling ${items.join(' dan ')}`
+    : `Bundling Kategori ${items.join(' dan ')}`;
+  
+  // Generate lift badge
+  const getLiftBadge = (lift) => {
+    if (lift > 1) {
+      return { text: 'Bundling Direkomendasikan', className: 'bg-green-100 text-green-700 border-green-200' };
+    } else if (lift === 1) {
+      return { text: 'Bundling Opsional', className: 'bg-yellow-100 text-yellow-700 border-yellow-200' };
+    } else {
+      return { text: 'Tidak Perlu Bundling', className: 'bg-red-100 text-red-700 border-red-200' };
+    }
+  };
+  
+  const liftBadge = getLiftBadge(bundle.lift);
+  
+  // Background color based on type and marked status
+  const bgColor = isMarked 
+    ? 'bg-white' 
+    : type === 'book' 
+      ? 'bg-green-50' 
+      : 'bg-blue-50';
+  
+  const borderColor = isMarked
+    ? 'border-gray-200'
+    : type === 'book'
+      ? 'border-green-200'
+      : 'border-blue-200';
+
+  return (
+    <div className={`rounded-lg border ${borderColor} ${bgColor} overflow-hidden transition-all duration-300`}>
+      {/* Accordion Header */}
+      <div 
+        className="flex items-center justify-between p-3 cursor-pointer hover:bg-opacity-80 transition-colors duration-200"
+        onClick={() => setIsExpanded(!isExpanded)}
+      >
+        <div className="flex items-center gap-2">
+          <Package className={`w-4 h-4 ${type === 'book' ? 'text-green-600' : 'text-blue-600'} transition-transform duration-300 ${isExpanded ? 'rotate-12' : ''}`} />
+          <span className={`text-sm font-medium ${type === 'book' ? 'text-green-800' : 'text-blue-800'}`}>
+            {title}
+          </span>
+          {isMarked && (
+            <span >
+              <CircleCheck className="ml-2 w-4 h-4 text-green-600" />
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <div className={`transform transition-transform duration-300 ${isExpanded ? 'rotate-180' : 'rotate-0'}`}>
+            <ChevronDown className="w-4 h-4 text-gray-500" />
+          </div>
+        </div>
+      </div>
+      
+      {/* Accordion Content with Animation */}
+      <div 
+        className="overflow-hidden transition-all duration-300 ease-in-out"
+        style={{ 
+          maxHeight: isExpanded ? `${contentHeight}px` : '0px',
+          opacity: isExpanded ? 1 : 0
+        }}
+      >
+        <div ref={contentRef} className="px-3 pb-3 pt-1 border-t border-gray-100">
+          {/* Support Info */}
+          <p className="text-sm text-gray-700 mb-2">
+            Sering dibeli bersamaan dalam <strong>{(bundle.support * 100).toFixed(1)}%</strong> transaksi.
+          </p>
+          
+          {/* Confidence Info */}
+          <p className="text-sm text-gray-700 mb-3">
+            <strong>{(bundle.confidence * 100).toFixed(0)}%</strong> Pelanggan membeli "{bundle.consequent.join(', ')}" jika membeli "{bundle.antecedent.join(', ')}".
+          </p>
+          
+          {/* Lift Badge */}
+          <div className="flex items-center justify-between">
+            <span className={`text-xs px-3 py-1 rounded-full border ${liftBadge.className}`}>
+              {liftBadge.text}
+            </span>
+            
+            {/* Mark as Bundled Button */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleMark();
+              }}
+              className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all duration-200 ${
+                isMarked 
+                  ? 'bg-gray-100 text-gray-600 border-gray-300 hover:bg-gray-200' 
+                  : 'bg-purple-100 text-purple-700 border-purple-300 hover:bg-purple-200'
+              }`}
+            >
+              {isMarked ? 'Batalkan' : 'Sudah Bundling'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ========== KOMPONEN BARU: Apriori Insights Section ==========
+const AprioriInsightsSection = ({ insights, loading, error }) => {
+  // State untuk menyimpan bundling yang sudah ditandai (localStorage)
+  const [markedBundles, setMarkedBundles] = useState(() => {
+    const saved = localStorage.getItem('markedBundles');
+    return saved ? JSON.parse(saved) : { books: [], categories: [] };
+  });
+
+  // Save to localStorage when markedBundles changes
+  useEffect(() => {
+    localStorage.setItem('markedBundles', JSON.stringify(markedBundles));
+  }, [markedBundles]);
+
+  // Toggle mark for a bundle
+  const toggleMarkBundle = (bundleKey, type) => {
+    setMarkedBundles(prev => {
+      const key = type === 'book' ? 'books' : 'categories';
+      const current = prev[key];
+      const isMarked = current.includes(bundleKey);
+      
+      return {
+        ...prev,
+        [key]: isMarked 
+          ? current.filter(k => k !== bundleKey)
+          : [...current, bundleKey]
+      };
+    });
+  };
+
+  // Generate unique key for a bundle
+  const getBundleKey = (bundle) => {
+    return [...bundle.antecedent, ...bundle.consequent].sort().join('|');
+  };
+
+  if (loading) {
+    return (
+      <div className="bg-base-100 p-6 rounded-xl border border-base-200">
+        <div className="flex items-center gap-2 mb-4">
+          <Sparkles className="w-5 h-5 text-purple-500" />
+          <h3 className="text-xl font-semibold">Rekomendasi Bundling</h3>
+        </div>
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="w-8 h-8 animate-spin text-purple-500" />
+          <span className="ml-3 text-base-content/60">Menganalisis pola pembelian...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="bg-base-100 p-6 rounded-xl border border-base-200">
+        <div className="flex items-center gap-2 mb-4">
+          <Sparkles className="w-5 h-5 text-purple-500" />
+          <h3 className="text-xl font-semibold">Rekomendasi Bundling</h3>
+        </div>
+        <div className="flex items-center gap-3 p-4 bg-red-50 rounded-lg border border-red-200">
+          <AlertCircle className="w-5 h-5 text-red-500 shrink-0" />
+          <span className="text-sm text-red-700">{error}</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!insights || !insights.success) {
+    return (
+      <div className="bg-base-100 p-6 rounded-xl border border-base-200">
+        <div className="flex items-center gap-2 mb-4">
+          <Sparkles className="w-5 h-5 text-purple-500" />
+          <h3 className="text-xl font-semibold">Rekomendasi Bundling</h3>
+        </div>
+        <div className="flex items-center gap-3 p-4 bg-amber-50 rounded-lg border border-amber-200">
+          <AlertCircle className="w-5 h-5 text-amber-500 shrink-0" />
+          <div>
+            <p className="text-sm text-amber-700 font-medium">{insights?.message || 'Data belum tersedia'}</p>
+            {insights?.total_transactions !== undefined && (
+              <p className="text-xs text-amber-600 mt-1">
+                Transaksi saat ini: {insights.total_transactions} / {insights.min_required || 30} minimal
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const { recommendations } = insights;
+  const hasBookBundles = recommendations?.book_bundles?.length > 0;
+  const hasCategoryBundles = recommendations?.category_bundles?.length > 0;
+
+  // Sort by confidence (persentase pelanggan) dari tertinggi ke terendah
+  const sortedBookBundles = hasBookBundles 
+    ? [...recommendations.book_bundles].sort((a, b) => b.confidence - a.confidence)
+    : [];
+  const sortedCategoryBundles = hasCategoryBundles
+    ? [...recommendations.category_bundles].sort((a, b) => b.confidence - a.confidence)
+    : [];
+
+  // Hitung jumlah bundle yang sudah ditandai berdasarkan data aktual
+  const markedBookCount = sortedBookBundles.filter(bundle => 
+    markedBundles.books.includes(getBundleKey(bundle))
+  ).length;
+  const markedCategoryCount = sortedCategoryBundles.filter(bundle => 
+    markedBundles.categories.includes(getBundleKey(bundle))
+  ).length;
+
+  return (
+    <div className="bg-base-100 p-6 rounded-xl border border-base-200">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <Sparkles className="w-5 h-5 text-purple-500" />
+          <h3 className="text-xl font-semibold">Rekomendasi Bundling</h3>
+        </div>
+        <div className="text-xs text-base-content/60 bg-purple-50 px-2 py-1 rounded">
+          {insights.total_transactions} transaksi dianalisis
+        </div>
+      </div>
+      
+      <p className="text-sm text-base-content/60 mb-8">
+        Rekomendasi bundling berdasarkan pola pembelian pelanggan. Klik untuk melihat detail dan tandai jika sudah membuat bundling.
+      </p>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Book Bundles */}
+        <div>
+          <div className="flex items-center gap-2 mb-3">
+            <BookOpen className="w-4 h-4 text-green-500" />
+            <h4 className="font-semibold text-sm">Bundling Judul Buku</h4>
+            <span className="text-xs text-gray-500">
+              ({markedBookCount}/{sortedBookBundles.length} selesai)
+            </span>
+          </div>
+          
+          {sortedBookBundles.length > 0 ? (
+            <div className="space-y-2">
+              {sortedBookBundles.map((bundle, idx) => {
+                const bundleKey = getBundleKey(bundle);
+                const isMarked = markedBundles.books.includes(bundleKey);
+                return (
+                  <BundlingAccordionItem
+                    key={idx}
+                    bundle={bundle}
+                    type="book"
+                    isMarked={isMarked}
+                    onToggleMark={() => toggleMarkBundle(bundleKey, 'book')}
+                  />
+                );
+              })}
+            </div>
+          ) : (
+            <div className="p-4 bg-gray-50 rounded-lg text-center">
+              <p className="text-sm text-base-content/60">
+                Belum cukup data untuk rekomendasi bundling buku.
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Category Bundles */}
+        <div>
+          <div className="flex items-center gap-2 mb-3">
+            <Package className="w-4 h-4 text-blue-500" />
+            <h4 className="font-semibold text-sm">Bundling Kategori</h4>
+            <span className="text-xs text-gray-500">
+              ({markedCategoryCount}/{sortedCategoryBundles.length} selesai)
+            </span>
+          </div>
+          
+          {sortedCategoryBundles.length > 0 ? (
+            <div className="space-y-2">
+              {sortedCategoryBundles.map((bundle, idx) => {
+                const bundleKey = getBundleKey(bundle);
+                const isMarked = markedBundles.categories.includes(bundleKey);
+                return (
+                  <BundlingAccordionItem
+                    key={idx}
+                    bundle={bundle}
+                    type="category"
+                    isMarked={isMarked}
+                    onToggleMark={() => toggleMarkBundle(bundleKey, 'category')}
+                  />
+                );
+              })}
+            </div>
+          ) : (
+            <div className="p-4 bg-gray-50 rounded-lg text-center">
+              <p className="text-sm text-base-content/60">
+                Belum cukup data untuk rekomendasi bundling kategori.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const COLORS = ['#3B82F6','#10B981','#F59E0B','#EF4444','#8B5CF6','#06B6D4','#84CC16','#F97316'];
 
 const ReportPage = () => {
@@ -99,6 +414,11 @@ const ReportPage = () => {
   const [year, setYear] = useState(String(new Date().getFullYear()));
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+
+  // ========== STATE UNTUK APRIORI ==========
+  const [aprioriInsights, setAprioriInsights] = useState(null);
+  const [aprioriLoading, setAprioriLoading] = useState(false);
+  const [aprioriError, setAprioriError] = useState(null);
 
   useEffect(() => {
     const fetchReports = async () => {
@@ -133,6 +453,30 @@ const ReportPage = () => {
     fetchReports();
   }, [year, startDate, endDate]);
 
+  // ========== USEEFFECT UNTUK APRIORI ==========
+  useEffect(() => {
+    const fetchAprioriInsights = async () => {
+      setAprioriLoading(true);
+      setAprioriError(null);
+      
+      try {
+        const response = await axios.get(`${API_REPORT_URL}/apriori-insights`);
+        setAprioriInsights(response.data);
+      } catch (err) {
+        console.error('Error fetching Apriori insights:', err);
+        if (err.response?.status === 503) {
+          setAprioriError('Layanan analisis Apriori tidak tersedia. Pastikan Python service berjalan di port 5001.');
+        } else {
+          setAprioriError(err.response?.data?.message || 'Gagal memuat insight Apriori.');
+        }
+      } finally {
+        setAprioriLoading(false);
+      }
+    };
+
+    fetchAprioriInsights();
+  }, []);
+
   const totalRevenue = useMemo(() => categoryData.reduce((s, c) => s + Number(c.total_revenue || 0), 0), [categoryData]);
   const monthlyChartData = useMemo(() => {
     const arr = Array.from({ length: 12 }, (_, i) => ({ month: i + 1, revenue: 0 }));
@@ -142,33 +486,6 @@ const ReportPage = () => {
     });
     return arr.map(x => ({ name: x.month, Omzet: x.revenue }));
   }, [monthlyRevenue]);
-
-  const insights = useMemo(() => {
-    const tips = [];
-    // Insight omzet turun >= 20% dibanding bulan lalu
-    if (monthlyChartData.length >= 2) {
-      const nonZero = monthlyChartData.filter(m => m.Omzet >= 0);
-      if (nonZero.length >= 2) {
-        const last = nonZero[nonZero.length - 1].Omzet;
-        const prev = nonZero[nonZero.length - 2].Omzet;
-        if (prev > 0 && (last < prev * 0.8)) {
-          tips.push('Omzet bulan ini turun ≥ 20% dibanding bulan lalu. Pertimbangkan promo bundling atau diskon terbatas.');
-        }
-      }
-    }
-    // Kategori meningkat ≥ 30% tidak dihitung detail waktu, tampilkan saran stok saat total kategori dominan besar
-    if (summary?.dominant_category && totalRevenue > 0) {
-      tips.push(`Kategori ${summary.dominant_category} menunjukkan kontribusi tinggi. Pertimbangkan penambahan stok dan display khusus.`);
-    }
-    // Pelanggan loyal berkurang — proxy: tidak ada implementasi historical; beri saran umum jika sedikit pelanggan punya >1 transaksi
-    const loyal = purchaseFrequency.filter(p => Number(p.tx_count || 0) >= 2).length;
-    const totalCustomers = purchaseFrequency.length;
-    if (totalCustomers > 0 && loyal / totalCustomers < 0.2) {
-      tips.push('Pelanggan loyal rendah. Pertimbangkan program loyalti: poin, voucher, atau membership.');
-    }
-    if (tips.length === 0) tips.push('Data stabil. Lanjutkan konsistensi stok, pelayanan, dan promosi mingguan.');
-    return tips;
-  }, [monthlyChartData, summary, totalRevenue, purchaseFrequency]);
 
   if (loading) return <div className="text-center p-8"><span className="loading loading-spinner loading-lg"></span> Memuat Laporan Analisis...</div>;
   if (error) return <div className="alert alert-error shadow-lg"><span>{error}</span></div>;
@@ -248,12 +565,12 @@ const ReportPage = () => {
           </div>
         </div>
         <div className="stat bg-base-100 rounded-xl border border-base-200 mb-4">
-          <div className="stat-title">Omzet Bulan Ini</div>
-          <div className="stat-value text-primary">{formatRupiah(monthlyChartData[new Date().getMonth()]?.Omzet || 0)}</div>
+          <div className="stat-title">Omzet</div>
+          <div className="stat-value font-bold text-primary">{formatRupiah(monthlyChartData[new Date().getMonth()]?.Omzet || 0)}</div>
         </div>
         <div className="stat bg-base-100 rounded-xl border border-base-200 mb-4">
-          <div className="stat-title">Rata-rata Nilai Tx</div>
-          <div className="stat-value">{formatRupiah(summary.avg_tx_value || 0)}</div>
+          <div className="stat-title">Rata-rata Nominal Transaksi</div>
+          <div className="stat-value font-bold">{formatRupiah(summary.avg_tx_value || 0)}</div>
         </div>
       </div>
 
@@ -262,7 +579,7 @@ const ReportPage = () => {
         <div className='grid grid-cols-3 gap-4'>
           <div className="stat bg-base-100 rounded-xl border border-base-200">
             <div className="stat-title">Total Transaksi</div>
-            <div className="stat-value">{summary.total_transactions}</div>
+            <div className="stat-value font-bold">{summary.total_transactions}</div>
           </div>
           <div className="stat bg-base-100 rounded-xl border border-base-200">
             <div className="stat-title">Rata-rata Item/Transaksi</div>
@@ -270,12 +587,12 @@ const ReportPage = () => {
           </div>
           <div className="stat bg-base-100 rounded-xl border border-base-200">
             <div className="stat-title">Kategori Dominan</div>
-            <div className="stat-value text-sm">{summary.dominant_category || '-'}</div>
+            <div className="stat-value text-sm font-bold">{summary.dominant_category || '-'}</div>
           </div>
         </div>
         <div className="stat bg-base-100 rounded-xl border border-base-200">
           <div className="stat-title">Buku Terlaris</div>
-          <div className="stat-value block whitespace-normal text-sm break-words max-w-full">{summary.bestselling_book || '-'}</div>
+          <div className="stat-value block whitespace-normal font-bold text-sm break-words max-w-full">{summary.bestselling_book || '-'}</div>
         </div>
       </div>
 
@@ -397,18 +714,14 @@ const ReportPage = () => {
         )}
       </div>
 
-        {/* Insights */}
-        <div className="bg-base-100 p-6 rounded-xl border border-base-200">
-          <h3 className="text-xl font-semibold mb-3">💡 Insight Otomatis</h3>
-          <div className="space-y-2">
-            {insights.map((t, i) => (
-              <div key={i} className="p-3 rounded-lg border border-base-200 bg-gray-50 flex items-start gap-2">
-                <span>💡</span>
-                <span className="text-sm">{t}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+      {/* ========== SECTION BARU: APRIORI INSIGHTS ========== */}
+      <div className="mb-6">
+        <AprioriInsightsSection 
+          insights={aprioriInsights} 
+          loading={aprioriLoading} 
+          error={aprioriError} 
+        />
+      </div>
     </div>
   );
 };

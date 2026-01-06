@@ -3,6 +3,73 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
+const axios = require('axios');
+
+const APRIORI_SERVICE_URL = process.env.APRIORI_SERVICE_URL || 'http://localhost:5001';
+
+/**
+ * GET /api/reports/apriori-insights
+ * Proxy endpoint untuk Apriori microservice
+ */
+router.get('/apriori-insights', async (req, res) => {
+    try {
+        const { min_support = 0.05, min_confidence = 0.3 } = req.query;
+        
+        const response = await axios.get(`${APRIORI_SERVICE_URL}/api/apriori/insights`, {
+            params: { min_support, min_confidence },
+            timeout: 30000 // 30 second timeout
+        });
+        
+        res.json(response.data);
+        
+    } catch (error) {
+        console.error('Error fetching Apriori insights:', error.message);
+        
+        if (error.code === 'ECONNREFUSED') {
+            return res.status(503).json({
+                success: false,
+                message: 'Layanan analisis Apriori tidak tersedia. Pastikan Python service berjalan di port 5001.',
+                recommendations: null
+            });
+        }
+        
+        res.status(500).json({
+            success: false,
+            message: 'Gagal mengambil insight Apriori.',
+            error: error.message
+        });
+    }
+});
+
+/**
+ * GET /api/reports/apriori-stats
+ * Get transaction statistics untuk Apriori
+ */
+router.get('/apriori-stats', async (req, res) => {
+    try {
+        const response = await axios.get(`${APRIORI_SERVICE_URL}/api/apriori/stats`, {
+            timeout: 10000
+        });
+        
+        res.json(response.data);
+        
+    } catch (error) {
+        console.error('Error fetching Apriori stats:', error.message);
+        
+        if (error.code === 'ECONNREFUSED') {
+            return res.status(503).json({
+                success: false,
+                message: 'Layanan analisis tidak tersedia.'
+            });
+        }
+        
+        res.status(500).json({
+            success: false,
+            message: 'Gagal mengambil statistik.',
+            error: error.message
+        });
+    }
+});
 
 // --- 1. Analisis Kinerja Harga (Margin Keuntungan Tertinggi) ---
 router.get('/performance', async (req, res) => {
