@@ -322,8 +322,8 @@ router.get('/:id', async (req, res) => {
 
         const transaction = headerRows[0];
 
-        // Query untuk mendapatkan items dalam transaksi
-        const [itemRows] = await db.query(`
+        // Query untuk mendapatkan items buku dalam transaksi
+        const [bookItemRows] = await db.query(`
             SELECT 
                 ti.book_id,
                 ti.quantity,
@@ -331,13 +331,48 @@ router.get('/:id', async (req, res) => {
                 b.isbn,
                 b.title,
                 b.author,
-                (ti.quantity * ti.price_at_sale) as subtotal
+                (ti.quantity * ti.price_at_sale) as subtotal,
+                'book' as item_type
             FROM transaction_items ti
             JOIN books b ON ti.book_id = b.book_id
-            WHERE ti.transaction_id = ?
+            WHERE ti.transaction_id = ? AND ti.book_id IS NOT NULL
         `, [id]);
 
-        // Format response
+        // Query untuk mendapatkan items bundle dalam transaksi
+        const [bundleItemRows] = await db.query(`
+            SELECT 
+                ti.bundle_id,
+                ti.quantity,
+                ti.price_at_sale,
+                bu.bundle_name,
+                (ti.quantity * ti.price_at_sale) as subtotal,
+                'bundle' as item_type
+            FROM transaction_items ti
+            JOIN bundles bu ON ti.bundle_id = bu.bundle_id
+            WHERE ti.transaction_id = ? AND ti.bundle_id IS NOT NULL
+        `, [id]);
+
+        // Format response - gabungkan buku dan bundle
+        const bookItems = bookItemRows.map(item => ({
+            book_id: item.book_id,
+            isbn: item.isbn,
+            title: item.title,
+            author: item.author,
+            quantity: item.quantity,
+            unit_price: item.price_at_sale,
+            subtotal: item.subtotal,
+            item_type: 'book'
+        }));
+
+        const bundleItems = bundleItemRows.map(item => ({
+            bundle_id: item.bundle_id,
+            title: item.bundle_name,
+            quantity: item.quantity,
+            unit_price: item.price_at_sale,
+            subtotal: item.subtotal,
+            item_type: 'bundle'
+        }));
+
         const response = {
             transaction_id: transaction.transaction_id,
             transaction_date: transaction.transaction_date,
@@ -345,15 +380,7 @@ router.get('/:id', async (req, res) => {
             payment_method: transaction.payment_method,
             customer_name: transaction.customer_name,
             customer_id: transaction.customer_id,
-            items: itemRows.map(item => ({
-                book_id: item.book_id,
-                isbn: item.isbn,
-                title: item.title,
-                author: item.author,
-                quantity: item.quantity,
-                unit_price: item.price_at_sale,
-                subtotal: item.subtotal
-            }))
+            items: [...bookItems, ...bundleItems]
         };
 
         res.json(response);

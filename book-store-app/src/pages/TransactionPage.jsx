@@ -1,6 +1,7 @@
 // src/pages/TransactionPage.jsx
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import axios from 'axios';
+import { Import } from 'lucide-react';
 
 const API_BOOK_URL = 'http://localhost:5000/api/books';
 const API_TRANS_URL = 'http://localhost:5000/api/transactions';
@@ -32,6 +33,7 @@ const TransactionPage = () => {
   // Filters
   const [q, setQ] = useState('');
   const [category, setCategory] = useState('');
+  const [periodFilter, setPeriodFilter] = useState('all'); // 'all' | 'today' | '7days' | '30days'
   // Tampilkan hanya transaksi keluar (OUT)
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -147,6 +149,71 @@ const TransactionPage = () => {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, category, startDate, endDate, activeTab]);
+
+  // Helper: Filter transaksi berdasarkan periode
+  const filterByPeriod = useCallback((data) => {
+    if (periodFilter === 'all') return data;
+    
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    return data.filter(row => {
+      const rowDate = new Date(row.date);
+      const rowDateOnly = new Date(rowDate.getFullYear(), rowDate.getMonth(), rowDate.getDate());
+      
+      if (periodFilter === 'today') {
+        return rowDateOnly.getTime() === today.getTime();
+      } else if (periodFilter === '7days') {
+        const sevenDaysAgo = new Date(today);
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        return rowDateOnly >= sevenDaysAgo;
+      } else if (periodFilter === '30days') {
+        const thirtyDaysAgo = new Date(today);
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        return rowDateOnly >= thirtyDaysAgo;
+      }
+      return true;
+    });
+  }, [periodFilter]);
+
+  // Helper: Kelompokkan transaksi berdasarkan tanggal
+  const groupByDate = (data) => {
+    const groups = {};
+    const today = new Date();
+    const todayStr = today.toISOString().split('T')[0];
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+    data.forEach(row => {
+      const dateObj = new Date(row.date);
+      const dateStr = dateObj.toISOString().split('T')[0];
+      
+      let label;
+      if (dateStr === todayStr) {
+        label = 'Hari Ini';
+      } else if (dateStr === yesterdayStr) {
+        label = 'Kemarin';
+      } else {
+        label = dateObj.toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+      }
+      
+      if (!groups[dateStr]) {
+        groups[dateStr] = { label, dateStr, items: [] };
+      }
+      groups[dateStr].items.push(row);
+    });
+
+    // Sort by date descending (newest first)
+    return Object.values(groups).sort((a, b) => b.dateStr.localeCompare(a.dateStr));
+  };
+
+  // Filtered and grouped transactions
+  const filteredTransactions = useMemo(() => filterByPeriod(transactions), [transactions, filterByPeriod]);
+  const groupedTransactions = useMemo(() => groupByDate(filteredTransactions), [filteredTransactions]);
+  
+  const filteredBundleTransactions = useMemo(() => filterByPeriod(bundleTransactions), [bundleTransactions, filterByPeriod]);
+  const groupedBundleTransactions = useMemo(() => groupByDate(filteredBundleTransactions), [filteredBundleTransactions]);
 
   const filteredBookOptions = useMemo(() => {
     const term = bookSearch.toLowerCase();
@@ -353,9 +420,15 @@ const TransactionPage = () => {
         <div>
           <h2 className="text-4xl font-bold">Transaksi</h2>
         </div>
+        <div className="flex gap-2">
+        <button className="btn btn-sm bg-green-600 text-white text-xs font-bold px-2 border-none rounded-lg" onClick={openModal}>
+          < Import className='w-4 h-4' /> Impor Data
+        </button>
         <button className="btn btn-sm bg-primary-crm text-white text-xs font-bold px-2 border-none rounded-lg" onClick={openModal}>
           + Tambah Transaksi
         </button>
+        </div>
+
       </div>
 
       {error && <div role="alert" className="alert alert-error shadow-lg mb-4"><span>{error}</span></div>}
@@ -364,22 +437,38 @@ const TransactionPage = () => {
       {/* Tabs untuk pilih Penjualan Buku atau Bundle */}
       <div className="flex gap-2 mb-4">
         <button 
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === 'books' ? 'bg-primary-crm text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+          className={`px-4 py-1 mb-1 rounded-lg text-sm font-medium transition-colors ${activeTab === 'books' ? 'bg-primary-crm text-white' : 'bg-white text-gray-700 hover:bg-gray-100 border'}`}
           onClick={() => setActiveTab('books')}
         >
-          📚 Penjualan Buku
+        Penjualan Buku
         </button>
         <button 
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === 'bundles' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+          className={`px-4 py-1 mb-1 rounded-lg text-sm font-medium transition-colors ${activeTab === 'bundles' ? 'bg-primary-crm text-white' : 'bg-white text-gray-700 hover:bg-gray-100 border'}`}
           onClick={() => setActiveTab('bundles')}
         >
-          📦 Penjualan Bundle
+        Penjualan Bundle
         </button>
       </div>
 
       {/* Search & Filters */}
       <div className="bg-base-100 p-4 rounded-xl border border-base-200 mb-4">
         <div className="flex flex-wrap gap-4 items-end">
+          {/* Filter Periode */}
+          <div className="w-[18vh]">
+            <label className="form-control w-full">
+              <div className="label"><span className="label-text text-sm font-bold">Periode</span></div>
+              <select 
+                className="select select-bordered w-full text-sm border px-2 rounded-lg"
+                value={periodFilter}
+                onChange={(e) => setPeriodFilter(e.target.value)}
+              >
+                <option value="all">Semua</option>
+                <option value="today">Hari Ini</option>
+                <option value="7days">7 Hari Terakhir</option>
+                <option value="30days">1 Bulan Terakhir</option>
+              </select>
+            </label>
+          </div>
           {activeTab === 'books' && (
             <div className="w-[20vh]">
               <label className="form-control w-full">
@@ -424,119 +513,154 @@ const TransactionPage = () => {
         </div>
       </div>
 
-      {/* Table Penjualan Buku */}
+      {/* Table Penjualan Buku - Grouped by Date */}
       {activeTab === 'books' && (
-        <div className="overflow-x-auto bg-base-100 p-4 rounded-xl border border-base-200">
+        <div className="space-y-4 max-h-[52vh] overflow-y-auto pr-1">
           {loading ? (
-            <div className="text-center p-8"><span className="loading loading-spinner loading-lg"></span> Memuat data...</div>
-          ) : (
-            <div className="max-h-[55vh] overflow-y-auto rounded-lg border border-base-200">
-              <table className="table table-zebra w-full">
-                <thead className="sticky top-0 bg-gray-50">
-                    <tr>
-                    <th>No</th>
-                    <th>Tanggal</th>
-                    <th>ISBN</th>
-                    <th>Judul</th>
-                    <th>Customer</th>
-                    <th>Metode</th>
-                    <th>Harga Satuan</th>
-                    <th>Jumlah</th>
-                    <th>Total</th>
-                    <th>Aksi</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {transactions.length === 0 ? (
-                    <tr>
-                      <td colSpan={10} className="text-center p-6 text-base-content/60">Tidak ada data</td>
-                    </tr>
-                  ) : (
-                    transactions.map((row, idx) => (
-                      <tr key={`${row.id || 'in'}-${idx}`}>
-                        <td>{idx + 1}</td>
-                        <td>{new Date(row.date).toLocaleString('id-ID')}</td>
-                        <td>{row.isbn}</td>
-                        <td>{row.title}</td>
-                        <td>{row.customerName}</td>
-                        <td>{
-                          row.payment_method
-                            ? ({ cash: 'Tunai', qris: 'QRIS', transfer: 'Transfer', debit: 'Debit' }[row.payment_method] || row.payment_method)
-                            : 'Tunai'
-                        }</td>
-                        <td>{row.selling_price && String(row.selling_price).includes(',') ? String(row.selling_price).split(',').map(price => formatRupiah(price)).join(', ') : formatRupiah(row.selling_price)}</td>
-                        <td>{row.quantity && String(row.quantity).includes(',') ? String(row.quantity).split(',').join(', ') : row.quantity}</td>
-                        <td>{formatRupiah(row.total)}</td>
-                        <td>
-                          {row.id && (
-                            <button 
-                              className="btn btn-sm btn-ghost btn-primary text-xs"
-                              onClick={() => openDetailModal(row)}
-                            >
-                              Detail
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+            <div className="bg-base-100 p-4 rounded-xl border border-base-200">
+              <div className="text-center p-8"><span className="loading loading-spinner loading-lg"></span> Memuat data...</div>
             </div>
+          ) : groupedTransactions.length === 0 ? (
+            <div className="bg-base-100 p-4 rounded-xl border border-base-200">
+              <div className="text-center p-8 text-base-content/60">Tidak ada data transaksi</div>
+            </div>
+          ) : (
+            groupedTransactions.map((group) => (
+              <div key={group.dateStr} className="bg-base-100 rounded-xl border border-purple-200 overflow-hidden">
+                {/* Date Header */}
+                <div className="bg-white px-4 py-2 border-b border-purple-200 flex items-center justify-between">
+                  <h3 className="font-semibold text-sm text-gray-700 py-2">
+                  {group.label}
+                  </h3>
+                  <span className="text-xs text-gray-500 border px-2 py-1 rounded-md">
+                    {group.items.length} transaksi
+                  </span>
+                </div>
+                {/* Table */}
+                <div className="overflow-x-auto">
+                  <table className="table table-zebra w-full text-sm">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="w-12">No</th>
+                        <th>ISBN</th>
+                        <th>Judul</th>
+                        <th>Customer</th>
+                        <th>Metode</th>
+                        <th>Harga</th>
+                        <th>Qty</th>
+                        <th>Total</th>
+                        <th>Aksi</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {group.items.map((row, idx) => (
+                        <tr key={`${row.id || 'in'}-${idx}`}>
+                          <td>{idx + 1}</td>
+                          <td className="text-xs">{row.isbn}</td>
+                          <td className="max-w-[200px] truncate" title={row.title}>{row.title}</td>
+                          <td>{row.customerName || '-'}</td>
+                          <td>{
+                            row.payment_method
+                              ? ({ cash: 'Tunai', qris: 'QRIS', transfer: 'Transfer', debit: 'Debit' }[row.payment_method] || row.payment_method)
+                              : 'Tunai'
+                          }</td>
+                          <td>{row.selling_price && String(row.selling_price).includes(',') ? String(row.selling_price).split(',').map(price => formatRupiah(price)).join(', ') : formatRupiah(row.selling_price)}</td>
+                          <td>{row.quantity && String(row.quantity).includes(',') ? String(row.quantity).split(',').join(', ') : row.quantity}</td>
+                          <td className="font-semibold">{formatRupiah(row.total)}</td>
+                          <td>
+                            {row.id && (
+                              <button 
+                                className="btn btn-xs btn-ghost text-primary text-xs"
+                                onClick={() => openDetailModal(row)}
+                              >
+                                Detail
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))
           )}
         </div>
       )}
 
-      {/* Table Penjualan Bundle */}
+      {/* Table Penjualan Bundle - Grouped by Date */}
       {activeTab === 'bundles' && (
-        <div className="overflow-x-auto bg-base-100 p-4 rounded-xl border border-purple-200">
+        <div className="space-y-4 max-h-[52vh] overflow-y-auto pr-1">
           {loading ? (
-            <div className="text-center p-8"><span className="loading loading-spinner loading-lg"></span> Memuat data...</div>
-          ) : (
-            <div className="max-h-[55vh] overflow-y-auto rounded-lg border border-purple-200">
-              <table className="table table-zebra w-full">
-                <thead className="sticky top-0 bg-purple-50">
-                  <tr>
-                    <th>No</th>
-                    <th>Tanggal</th>
-                    <th>Nama Bundle</th>
-                    <th>Customer</th>
-                    <th>Metode</th>
-                    <th>Harga</th>
-                    <th>Jumlah</th>
-                    <th>Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {bundleTransactions.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="text-center p-6 text-base-content/60">Tidak ada data penjualan bundle</td>
-                    </tr>
-                  ) : (
-                    bundleTransactions.map((row, idx) => (
-                      <tr key={`bundle-${row.id}-${idx}`}>
-                        <td>{idx + 1}</td>
-                        <td>{new Date(row.date).toLocaleString('id-ID')}</td>
-                        <td>
-                          <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-sm">
-                            {row.bundle_name}
-                          </span>
-                        </td>
-                        <td>{row.customerName || '-'}</td>
-                        <td>{
-                          row.payment_method
-                            ? ({ cash: 'Tunai', qris: 'QRIS', transfer: 'Transfer', debit: 'Debit' }[row.payment_method] || row.payment_method)
-                            : 'Tunai'
-                        }</td>
-                        <td>{formatRupiah(row.selling_price)}</td>
-                        <td>{row.quantity}</td>
-                        <td className="font-semibold text-purple-700">{formatRupiah(row.total)}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+            <div className="bg-base-100 p-4 rounded-xl border border-purple-200">
+              <div className="text-center p-8"><span className="loading loading-spinner loading-lg"></span> Memuat data...</div>
             </div>
+          ) : groupedBundleTransactions.length === 0 ? (
+            <div className="bg-base-100 p-4 rounded-xl border border-purple-200">
+              <div className="text-center p-8 text-base-content/60">Tidak ada data penjualan bundle</div>
+            </div>
+          ) : (
+            groupedBundleTransactions.map((group) => (
+              <div key={group.dateStr} className="bg-base-100 rounded-xl border border-purple-200 overflow-hidden">
+                {/* Date Header */}
+                <div className="bg-white px-4 py-2 border-b border-purple-200 flex items-center justify-between">
+                  <h3 className="font-semibold text-sm text-gray-700 py-2">
+                    {group.label}
+                  </h3>
+                  <span className="text-xs text-gray-700 bg-white px-2 py-1 rounded-md border">
+                    {group.items.length} transaksi
+                  </span>
+                </div>
+                {/* Table */}
+                <div className="overflow-x-auto">
+                  <table className="table table-zebra w-full text-sm">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="w-12">No</th>
+                        <th>Nama Bundle</th>
+                        <th>Customer</th>
+                        <th>Metode</th>
+                        <th>Harga</th>
+                        <th>Qty</th>
+                        <th>Total</th>
+                        <th>Aksi</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {group.items.map((row, idx) => (
+                        <tr key={`bundle-${row.id}-${idx}`}>
+                          <td>{idx + 1}</td>
+                          <td>
+                            <span className="px-2 py-1 text-black">
+                              {row.bundle_name}
+                            </span>
+                          </td>
+                          <td>{row.customerName || '-'}</td>
+                          <td>{
+                            row.payment_method
+                              ? ({ cash: 'Tunai', qris: 'QRIS', transfer: 'Transfer', debit: 'Debit' }[row.payment_method] || row.payment_method)
+                              : 'Tunai'
+                          }</td>
+                          <td>{formatRupiah(row.selling_price)}</td>
+                          <td>{row.quantity}</td>
+                          <td className="font-semibold text-black">{formatRupiah(row.total)}</td>
+                          <td>
+                            {row.id && (
+                              <button 
+                                className="btn btn-xs btn-ghost text-primary text-xs"
+                                onClick={() => openDetailModal(row)}
+                              >
+                                Detail
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))
           )}
         </div>
       )}
@@ -862,38 +986,80 @@ const TransactionPage = () => {
                 <div className="mb-4">
                   <div className="text-sm font-semibold mb-3">Daftar Item</div>
                   <div className="overflow-x-auto rounded-lg border border-base-200">
-                    <table className="table table-zebra w-full text-sm">
-                      <thead className="sticky top-0 bg-gray-50">
-                        <tr>
-                          <th>No</th>
-                          <th>Judul Buku</th>
-                          <th>ISBN</th>
-                          <th>Penulis</th>
-                          <th className="text-right">Jumlah</th>
-                          <th className="text-right">Harga Satuan</th>
-                          <th className="text-right">Subtotal</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {transactionDetail.items.map((item, index) => (
-                          <tr key={item.book_id}>
-                            <td>{index + 1}</td>
-                            <td className="max-w-xs truncate" title={item.title}>{item.title}</td>
-                            <td>{item.isbn}</td>
-                            <td className="max-w-xs truncate" title={item.author}>{item.author}</td>
-                            <td className="text-right">{item.quantity}</td>
-                            <td className="text-right">{formatRupiah(item.unit_price)}</td>
-                            <td className="text-right font-semibold">{formatRupiah(item.subtotal)}</td>
+                    {/* Cek apakah transaksi hanya berisi bundle */}
+                    {transactionDetail.items.every(item => item.item_type === 'bundle') ? (
+                      // Tabel khusus Bundle (tanpa ISBN dan Penulis)
+                      <table className="table table-zebra w-full text-sm">
+                        <thead className="sticky top-0 bg-gray-50">
+                          <tr>
+                            <th>No</th>
+                            <th>Nama Bundle</th>
+                            <th className="text-right">Jumlah</th>
+                            <th className="text-right">Harga Satuan</th>
+                            <th className="text-right">Subtotal</th>
                           </tr>
-                        ))}
-                      </tbody>
-                      <tfoot>
-                        <tr className="bg-base-200">
-                          <td colSpan={6} className="text-right font-bold">Total Harga</td>
-                          <td className="text-right font-bold text-lg text-primary">{formatRupiah(transactionDetail.total_amount)}</td>
-                        </tr>
-                      </tfoot>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {transactionDetail.items.map((item, index) => (
+                            <tr key={item.bundle_id} className="bg-purple-50">
+                              <td>{index + 1}</td>
+                              <td className="max-w-xs truncate" title={item.title}>{item.title}</td>
+                              <td className="text-right">{item.quantity}</td>
+                              <td className="text-right">{formatRupiah(item.unit_price)}</td>
+                              <td className="text-right font-semibold">{formatRupiah(item.subtotal)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr className="bg-base-200">
+                            <td colSpan={4} className="text-right font-bold">Total Harga</td>
+                            <td className="text-right font-bold text-lg text-primary">{formatRupiah(transactionDetail.total_amount)}</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    ) : (
+                      // Tabel dengan Buku (termasuk ISBN dan Penulis)
+                      <table className="table table-zebra w-full text-sm">
+                        <thead className="sticky top-0 bg-gray-50">
+                          <tr>
+                            <th>No</th>
+                            <th>Tipe</th>
+                            <th>Nama</th>
+                            <th>ISBN</th>
+                            <th>Penulis</th>
+                            <th className="text-right">Jumlah</th>
+                            <th className="text-right">Harga Satuan</th>
+                            <th className="text-right">Subtotal</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {transactionDetail.items.map((item, index) => (
+                            <tr key={item.book_id || item.bundle_id} className={item.item_type === 'bundle' ? 'bg-purple-50' : ''}>
+                              <td>{index + 1}</td>
+                              <td>
+                                {item.item_type === 'bundle' ? (
+                                  <span className="text-xs px-2 py-1 bg-purple-100 text-purple-700 rounded">Bundle</span>
+                                ) : (
+                                  <span className="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded">Buku</span>
+                                )}
+                              </td>
+                              <td className="max-w-xs truncate" title={item.title}>{item.title}</td>
+                              <td>{item.isbn || '-'}</td>
+                              <td className="max-w-xs truncate" title={item.author}>{item.author || '-'}</td>
+                              <td className="text-right">{item.quantity}</td>
+                              <td className="text-right">{formatRupiah(item.unit_price)}</td>
+                              <td className="text-right font-semibold">{formatRupiah(item.subtotal)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr className="bg-base-200">
+                            <td colSpan={7} className="text-right font-bold">Total Harga</td>
+                            <td className="text-right font-bold text-lg text-primary">{formatRupiah(transactionDetail.total_amount)}</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    )}
                   </div>
                 </div>
               </div>
