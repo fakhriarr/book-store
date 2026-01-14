@@ -1,19 +1,9 @@
-"""
-Apriori Engine untuk analisis market basket
-Menghasilkan rekomendasi bundling buku dan kategori
-"""
-
 import pandas as pd
 from mlxtend.frequent_patterns import apriori, association_rules
 from mlxtend.preprocessing import TransactionEncoder
 
 
 def prepare_transactions_by_book(raw_data: list[dict]) -> list[list[str]]:
-    """
-    Mengubah raw data menjadi format transaksi per judul buku
-    Input: [{'transaction_id': 1, 'title': 'Buku A'}, ...]
-    Output: [['Buku A', 'Buku B'], ['Buku C'], ...]
-    """
     df = pd.DataFrame(raw_data)
     if df.empty:
         return []
@@ -28,11 +18,6 @@ def prepare_transactions_by_book(raw_data: list[dict]) -> list[list[str]]:
 
 
 def prepare_transactions_by_category(raw_data: list[dict]) -> list[list[str]]:
-    """
-    Mengubah raw data menjadi format transaksi per kategori
-    Input: [{'transaction_id': 1, 'category': 'Fiksi'}, ...]
-    Output: [['Fiksi', 'Sejarah'], ['Novel'], ...]
-    """
     df = pd.DataFrame(raw_data)
     if df.empty:
         return []
@@ -49,17 +34,6 @@ def prepare_transactions_by_category(raw_data: list[dict]) -> list[list[str]]:
 
 
 def run_apriori(transactions: list[list[str]], min_support: float = 0.05, min_confidence: float = 0.3) -> list[dict]:
-    """
-    Menjalankan algoritma Apriori dan menghasilkan association rules
-    
-    Parameters:
-    - transactions: list of transactions, each transaction is a list of items
-    - min_support: minimum support threshold (default 5%)
-    - min_confidence: minimum confidence threshold (default 30%)
-    
-    Returns:
-    - list of association rules dengan support, confidence, dan lift
-    """
     if not transactions or len(transactions) < 2:
         return []
     
@@ -115,9 +89,6 @@ def run_apriori(transactions: list[list[str]], min_support: float = 0.05, min_co
 
 
 def generate_insight_text(rule: dict, rule_type: str = 'book') -> str:
-    """
-    Generate human-readable insight dari association rule
-    """
     antecedent = ', '.join(rule['antecedent'])
     consequent = ', '.join(rule['consequent'])
     confidence_pct = int(rule['confidence'] * 100)

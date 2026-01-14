@@ -4,7 +4,8 @@ import InventoryPage from './pages/InventoryPage';
 import TransactionPage from './pages/TransactionPage';
 import ReportPage from './pages/ReportPage';
 import Dashboard from './pages/Dashboard';
-import { House, Package2, ReceiptText, BarChart2 } from "lucide-react";
+import BundlePage from './pages/BundlePage';
+import { House, Package2, ReceiptText, BarChart2, PackageOpen } from "lucide-react";
 
 // Komponen untuk mengganti tema (Opsional, tergantung konfigurasi daisyUI)
 const ThemeController = () => {
@@ -98,6 +99,7 @@ function App() {
               <Route path="/inventory" element={<InventoryPage />} />
               <Route path="/transaction" element={<TransactionPage />} />
               <Route path="/reports" element={<ReportPage />} />
+              <Route path="/bundles" element={<BundlePage />} />
             </Routes>
           </main>
         </div>
@@ -109,6 +111,7 @@ function App() {
             <li className="menu-title text-base-content-crm text-xs uppercase tracking-wider text-base-content/60 mb-12">Toko Buku Solo</li>
             <NavLink to="/"><House className="w-5 h-5"/>Dashboard</NavLink>
             <NavLink to="/inventory"><Package2 className="w-5 h-5"/>Inventaris</NavLink>
+            <NavLink to="/bundles"><PackageOpen className="w-5 h-5"/>Bundle</NavLink>
             <NavLink to="/transaction"><ReceiptText className="w-5 h-5"/>Transaksi</NavLink>
             <NavLink to="/reports"><BarChart2 className="w-5 h-5"/>Laporan</NavLink>
           </ul>

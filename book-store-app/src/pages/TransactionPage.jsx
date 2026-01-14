@@ -4,6 +4,7 @@ import axios from 'axios';
 
 const API_BOOK_URL = 'http://localhost:5000/api/books';
 const API_TRANS_URL = 'http://localhost:5000/api/transactions';
+const API_BUNDLE_URL = 'http://localhost:5000/api/bundles';
 
 // Utility function untuk format Rupiah
 const formatRupiah = (number) => {
@@ -16,12 +17,17 @@ const formatRupiah = (number) => {
 
 const TransactionPage = () => {
   const [transactions, setTransactions] = useState([]);
+  const [bundleTransactions, setBundleTransactions] = useState([]);
   const [categories, setCategories] = useState([]);
   const [books, setBooks] = useState([]);
+  const [bundles, setBundles] = useState([]);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [successMessage, setSuccessMessage] = useState(null);
+
+  // Tab View State
+  const [activeTab, setActiveTab] = useState('books'); // 'books' | 'bundles'
 
   // Filters
   const [q, setQ] = useState('');
@@ -39,7 +45,14 @@ const TransactionPage = () => {
   const [bookSearch, setBookSearch] = useState('');
   const [quantity, setQuantity] = useState('1');
   const [draftItems, setDraftItems] = useState([]);
+  const [draftBundles, setDraftBundles] = useState([]);
   const [submitting, setSubmitting] = useState(false);
+  
+  // Bundle modal state
+  const [selectedBundle, setSelectedBundle] = useState(null);
+  const [bundleSearch, setBundleSearch] = useState('');
+  const [bundleQuantity, setBundleQuantity] = useState('1');
+  const [itemType, setItemType] = useState('book'); // 'book' | 'bundle'
 
   // Detail modal state
   const [detailModalOpen, setDetailModalOpen] = useState(false);
@@ -48,8 +61,10 @@ const TransactionPage = () => {
   const [detailLoading, setDetailLoading] = useState(false);
 
   const draftTotal = useMemo(() => {
-    return draftItems.reduce((sum, it) => sum + it.total, 0);
-  }, [draftItems]);
+    const bookTotal = draftItems.reduce((sum, it) => sum + it.total, 0);
+    const bundleTotal = draftBundles.reduce((sum, it) => sum + it.total, 0);
+    return bookTotal + bundleTotal;
+  }, [draftItems, draftBundles]);
 
   const fetchCategories = async () => {
     try {
@@ -64,6 +79,15 @@ const TransactionPage = () => {
     try {
       const res = await axios.get(API_BOOK_URL);
       setBooks(res.data || []);
+    } catch {
+      // ignore
+    }
+  };
+
+  const fetchBundles = async () => {
+    try {
+      const res = await axios.get(API_BUNDLE_URL);
+      setBundles(res.data || []);
     } catch {
       // ignore
     }
@@ -90,15 +114,39 @@ const TransactionPage = () => {
     }
   };
 
+  const fetchBundleTransactions = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = {};
+      if (q) params.q = q;
+      if (startDate) params.startDate = startDate;
+      if (endDate) params.endDate = endDate;
+
+      const res = await axios.get(`${API_TRANS_URL}/bundles/list`, { params });
+      setBundleTransactions(res.data || []);
+    } catch (e) {
+      console.error(e);
+      setError('Gagal memuat data transaksi bundle.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchCategories();
     fetchBooks();
+    fetchBundles();
   }, []);
 
   useEffect(() => {
-    fetchTransactions();
+    if (activeTab === 'books') {
+      fetchTransactions();
+    } else {
+      fetchBundleTransactions();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, category, startDate, endDate]);
+  }, [q, category, startDate, endDate, activeTab]);
 
   const filteredBookOptions = useMemo(() => {
     const term = bookSearch.toLowerCase();
@@ -107,14 +155,25 @@ const TransactionPage = () => {
     ).slice(0, 10);
   }, [books, bookSearch]);
 
+  const filteredBundleOptions = useMemo(() => {
+    const term = bundleSearch.toLowerCase();
+    return bundles.filter(b =>
+      b.bundle_name.toLowerCase().includes(term)
+    ).slice(0, 10);
+  }, [bundles, bundleSearch]);
+
   const resetModal = () => {
     setSelectedBook(null);
     setBookSearch('');
     setQuantity('1');
     setDraftItems([]);
+    setDraftBundles([]);
     setPaymentMethod('cash');
     setCustomerName('');
-    // always OUT
+    setSelectedBundle(null);
+    setBundleSearch('');
+    setBundleQuantity('1');
+    setItemType('book');
   };
 
   const openModal = () => {
@@ -180,8 +239,52 @@ const TransactionPage = () => {
     setDraftItems(draftItems.filter(it => it.book_id !== bookId));
   };
 
+  const addBundleToDraft = () => {
+    if (!selectedBundle) return;
+    const price = selectedBundle.selling_price;
+    const qSafe = Math.max(1, parseInt(bundleQuantity || '1', 10));
+    const maxOut = selectedBundle.stock || 0;
+    if (qSafe > maxOut) {
+      setError(`Stok bundle ${selectedBundle.bundle_name} tidak mencukupi.`);
+      return;
+    }
+    const existsIndex = draftBundles.findIndex(it => it.bundle_id === selectedBundle.bundle_id);
+    const newItem = {
+      bundle_id: selectedBundle.bundle_id,
+      bundle_name: selectedBundle.bundle_name,
+      unit_price: price,
+      quantity: qSafe,
+      total: qSafe * price,
+      items: selectedBundle.items,
+    };
+    if (existsIndex >= 0) {
+      const items = [...draftBundles];
+      const mergedQty = items[existsIndex].quantity + qSafe;
+      if (mergedQty > maxOut) {
+        setError(`Stok bundle ${selectedBundle.bundle_name} tidak mencukupi.`);
+        return;
+      }
+      items[existsIndex] = {
+        ...items[existsIndex],
+        quantity: mergedQty,
+        total: mergedQty * price,
+      };
+      setDraftBundles(items);
+    } else {
+      setDraftBundles([...draftBundles, newItem]);
+    }
+    setSelectedBundle(null);
+    setBundleSearch('');
+    setBundleQuantity('1');
+    setError(null);
+  };
+
+  const removeDraftBundle = (bundleId) => {
+    setDraftBundles(draftBundles.filter(it => it.bundle_id !== bundleId));
+  };
+
   const submitDraft = async () => {
-    if (draftItems.length === 0) {
+    if (draftItems.length === 0 && draftBundles.length === 0) {
       setError('Daftar item kosong.');
       return;
     }
@@ -194,13 +297,19 @@ const TransactionPage = () => {
         quantity: it.quantity,
         price_at_sale: it.unit_price,
       }));
-      await axios.post(API_TRANS_URL, { items, payment_method: paymentMethod, customer_name: customerName });
+      const bundlesPayload = draftBundles.map(it => ({
+        bundle_id: it.bundle_id,
+        quantity: it.quantity,
+      }));
+      await axios.post(API_TRANS_URL, { items, bundles: bundlesPayload, payment_method: paymentMethod, customer_name: customerName });
       setSuccessMessage(`Transaksi berhasil. Total: ${formatRupiah(draftTotal)}`);
       closeModal();
       await fetchTransactions();
+      await fetchBundleTransactions();
+      await fetchBundles();
     } catch (e) {
       console.error(e);
-      setError('Gagal menyimpan transaksi.');
+      setError(e.response?.data?.error || 'Gagal menyimpan transaksi.');
     } finally {
       setSubmitting(false);
     }
@@ -252,24 +361,42 @@ const TransactionPage = () => {
       {error && <div role="alert" className="alert alert-error shadow-lg mb-4"><span>{error}</span></div>}
       {successMessage && <div role="alert" className="alert alert-success shadow-lg mb-4"><span>{successMessage}</span></div>}
 
+      {/* Tabs untuk pilih Penjualan Buku atau Bundle */}
+      <div className="flex gap-2 mb-4">
+        <button 
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === 'books' ? 'bg-primary-crm text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+          onClick={() => setActiveTab('books')}
+        >
+          📚 Penjualan Buku
+        </button>
+        <button 
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === 'bundles' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+          onClick={() => setActiveTab('bundles')}
+        >
+          📦 Penjualan Bundle
+        </button>
+      </div>
+
       {/* Search & Filters */}
       <div className="bg-base-100 p-4 rounded-xl border border-base-200 mb-4">
         <div className="flex flex-wrap gap-4 items-end">
-          <div className="w-[20vh]">
-            <label className="form-control w-full">
-              <div className="label"><span className="label-text text-sm font-bold">Kategori</span></div>
-              <select 
-                className="select select-bordered w-full text-sm border px-2 rounded-lg"
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-              >
-                <option value="">Semua</option>
-                {categories.map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
-            </label>
-          </div>
+          {activeTab === 'books' && (
+            <div className="w-[20vh]">
+              <label className="form-control w-full">
+                <div className="label"><span className="label-text text-sm font-bold">Kategori</span></div>
+                <select 
+                  className="select select-bordered w-full text-sm border px-2 rounded-lg"
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                >
+                  <option value="">Semua</option>
+                  {categories.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
           <div className='max-w-[20vh]'>
             <label className="form-control">
               <div className="label"><span className="label-text text-sm font-bold">Dari Tanggal</span></div>
@@ -287,7 +414,7 @@ const TransactionPage = () => {
               <div className="label"><span className="label-text text-sm font-bold">Pencarian</span></div>
               <input 
                 type="text" 
-                placeholder="Cari judul atau ISBN..." 
+                placeholder={activeTab === 'books' ? "Cari judul atau ISBN..." : "Cari nama bundle..."}
                 className="input input-bordered w-full text-sm border px-2 rounded-lg"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
@@ -297,66 +424,122 @@ const TransactionPage = () => {
         </div>
       </div>
 
-      {/* Table */}
-      <div className="overflow-x-auto bg-base-100 p-4 rounded-xl border border-base-200">
-        {loading ? (
-          <div className="text-center p-8"><span className="loading loading-spinner loading-lg"></span> Memuat data...</div>
-        ) : (
-          <div className="max-h-[55vh] overflow-y-auto rounded-lg border border-base-200">
-            <table className="table table-zebra w-full">
-              <thead className="sticky top-0 bg-gray-50">
-                  <tr>
-                  <th>No</th>
-                  <th>Tanggal</th>
-                  <th>ISBN</th>
-                  <th>Judul</th>
-                  <th>Customer</th>
-                  <th>Metode</th>
-                  <th>Harga Satuan</th>
-                  <th>Jumlah</th>
-                  <th>Total</th>
-                  <th>Aksi</th>
-                </tr>
-              </thead>
-              <tbody>
-                {transactions.length === 0 ? (
-                  <tr>
-                    <td colSpan={11} className="text-center p-6 text-base-content/60">Tidak ada data</td>
+      {/* Table Penjualan Buku */}
+      {activeTab === 'books' && (
+        <div className="overflow-x-auto bg-base-100 p-4 rounded-xl border border-base-200">
+          {loading ? (
+            <div className="text-center p-8"><span className="loading loading-spinner loading-lg"></span> Memuat data...</div>
+          ) : (
+            <div className="max-h-[55vh] overflow-y-auto rounded-lg border border-base-200">
+              <table className="table table-zebra w-full">
+                <thead className="sticky top-0 bg-gray-50">
+                    <tr>
+                    <th>No</th>
+                    <th>Tanggal</th>
+                    <th>ISBN</th>
+                    <th>Judul</th>
+                    <th>Customer</th>
+                    <th>Metode</th>
+                    <th>Harga Satuan</th>
+                    <th>Jumlah</th>
+                    <th>Total</th>
+                    <th>Aksi</th>
                   </tr>
-                ) : (
-                  transactions.map((row, idx) => (
-                    <tr key={`${row.id || 'in'}-${idx}`}>
-                      <td>{idx + 1}</td>
-                      <td>{new Date(row.date).toLocaleString('id-ID')}</td>
-                      <td>{row.isbn}</td>
-                      <td>{row.title}</td>
-                      <td>{row.customerName}</td>
-                      <td>{
-                        row.payment_method
-                          ? ({ cash: 'Tunai', qris: 'QRIS', transfer: 'Transfer', debit: 'Debit' }[row.payment_method] || row.payment_method)
-                          : 'Tunai'
-                      }</td>
-                      <td>{row.selling_price && row.selling_price.includes(',') ? row.selling_price.split(',').map(price => formatRupiah(price)).join(', ') : formatRupiah(row.selling_price)}</td>
-                      <td>{row.quantity && row.quantity.includes(',') ? row.quantity.split(',').join(', ') : row.quantity}</td>
-                      <td>{formatRupiah(row.total)}</td>
-                      <td>
-                        {row.id && (
-                          <button 
-                            className="btn btn-sm btn-ghost btn-primary text-xs"
-                            onClick={() => openDetailModal(row)}
-                          >
-                            Detail
-                          </button>
-                        )}
-                      </td>
+                </thead>
+                <tbody>
+                  {transactions.length === 0 ? (
+                    <tr>
+                      <td colSpan={10} className="text-center p-6 text-base-content/60">Tidak ada data</td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+                  ) : (
+                    transactions.map((row, idx) => (
+                      <tr key={`${row.id || 'in'}-${idx}`}>
+                        <td>{idx + 1}</td>
+                        <td>{new Date(row.date).toLocaleString('id-ID')}</td>
+                        <td>{row.isbn}</td>
+                        <td>{row.title}</td>
+                        <td>{row.customerName}</td>
+                        <td>{
+                          row.payment_method
+                            ? ({ cash: 'Tunai', qris: 'QRIS', transfer: 'Transfer', debit: 'Debit' }[row.payment_method] || row.payment_method)
+                            : 'Tunai'
+                        }</td>
+                        <td>{row.selling_price && String(row.selling_price).includes(',') ? String(row.selling_price).split(',').map(price => formatRupiah(price)).join(', ') : formatRupiah(row.selling_price)}</td>
+                        <td>{row.quantity && String(row.quantity).includes(',') ? String(row.quantity).split(',').join(', ') : row.quantity}</td>
+                        <td>{formatRupiah(row.total)}</td>
+                        <td>
+                          {row.id && (
+                            <button 
+                              className="btn btn-sm btn-ghost btn-primary text-xs"
+                              onClick={() => openDetailModal(row)}
+                            >
+                              Detail
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Table Penjualan Bundle */}
+      {activeTab === 'bundles' && (
+        <div className="overflow-x-auto bg-base-100 p-4 rounded-xl border border-purple-200">
+          {loading ? (
+            <div className="text-center p-8"><span className="loading loading-spinner loading-lg"></span> Memuat data...</div>
+          ) : (
+            <div className="max-h-[55vh] overflow-y-auto rounded-lg border border-purple-200">
+              <table className="table table-zebra w-full">
+                <thead className="sticky top-0 bg-purple-50">
+                  <tr>
+                    <th>No</th>
+                    <th>Tanggal</th>
+                    <th>Nama Bundle</th>
+                    <th>Customer</th>
+                    <th>Metode</th>
+                    <th>Harga</th>
+                    <th>Jumlah</th>
+                    <th>Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bundleTransactions.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="text-center p-6 text-base-content/60">Tidak ada data penjualan bundle</td>
+                    </tr>
+                  ) : (
+                    bundleTransactions.map((row, idx) => (
+                      <tr key={`bundle-${row.id}-${idx}`}>
+                        <td>{idx + 1}</td>
+                        <td>{new Date(row.date).toLocaleString('id-ID')}</td>
+                        <td>
+                          <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-sm">
+                            {row.bundle_name}
+                          </span>
+                        </td>
+                        <td>{row.customerName || '-'}</td>
+                        <td>{
+                          row.payment_method
+                            ? ({ cash: 'Tunai', qris: 'QRIS', transfer: 'Transfer', debit: 'Debit' }[row.payment_method] || row.payment_method)
+                            : 'Tunai'
+                        }</td>
+                        <td>{formatRupiah(row.selling_price)}</td>
+                        <td>{row.quantity}</td>
+                        <td className="font-semibold text-purple-700">{formatRupiah(row.total)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Modal Tambah Transaksi */}
       <dialog id="transaction_modal" className="modal">
@@ -367,74 +550,172 @@ const TransactionPage = () => {
             </div>
 
             <div className="flex-1 overflow-y-auto pr-1">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
-              <div className="md:col-span-3 relative">
-                <label className="form-control w-full">
-                  <div className="label"><span className="label-text text-sm font-bold">Cari Judul / ISBN</span></div>
-                  <input 
-                    type="text" 
-                    className="input input-bordered w-full text-sm border rounded-lg px-2" 
-                    placeholder="Ketik judul atau ISBN..."
-                    value={bookSearch}
-                    onChange={(e) => { setBookSearch(e.target.value); setSelectedBook(null); }}
-                  />
-                </label>
-                {bookSearch && !selectedBook && (
-                  <div className="absolute left-0 right-0 z-20 mt-1 max-h-40 overflow-y-auto border rounded-lg bg-base-100 shadow">
-                    {filteredBookOptions.map(b => (
-                      <button key={b.book_id} className="w-full text-left px-3 py-2 hover:bg-base-200" onClick={() => setSelectedBook(b)}>
-                        <div className="font-medium text-sm">{b.title}</div>
-                        <div className="text-xs text-base-content/60">{b.isbn} · Stok: {b.stock_qty}</div>
-                      </button>
-                    ))}
-                    {filteredBookOptions.length === 0 && (
-                      <div className="px-3 py-2 text-sm text-base-content/60">Tidak ada hasil</div>
-                    )}
-                  </div>
-                )}
-              </div>
-              <div className="md:col-span-1">
-                <label className="form-control w-full">
-                  <div className="label"><span className="label-text text-sm font-bold">Jumlah</span></div>
-                  <input 
-                    type="number" 
-                    min={1} 
-                    className="input input-bordered w-full text-sm border rounded-lg px-2" 
-                    value={quantity} 
-                    onChange={(e) => setQuantity(e.target.value)}
-                    onBlur={() => {
-                      const v = parseInt(quantity || '1', 10);
-                      setQuantity(String(Math.max(1, isNaN(v) ? 1 : v)));
-                    }}
-                  />
-                </label>
-              </div>
+            
+            {/* Tab untuk pilih Buku atau Bundle */}
+            <div className="flex gap-2 mb-4">
+              <button 
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${itemType === 'book' ? 'bg-primary-crm text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+                onClick={() => setItemType('book')}
+              >
+                📚 Buku
+              </button>
+              <button 
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${itemType === 'bundle' ? 'bg-primary-crm text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+                onClick={() => setItemType('bundle')}
+              >
+                📦 Bundle
+              </button>
             </div>
 
-            {selectedBook && (
-              <div className="mb-4 p-3 rounded-lg border border-base-200 bg-gray-50 text-sm">
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <div>
-                    <div className="text-base-content/70 mb-2 text-sm font-bold">Judul</div>
-                    <div className="text-sm line-clamp-2">{selectedBook.title}</div>
+            {/* Form Pilih Buku */}
+            {itemType === 'book' && (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+                  <div className="md:col-span-3 relative">
+                    <label className="form-control w-full">
+                      <div className="label"><span className="label-text text-sm font-bold">Cari Judul / ISBN</span></div>
+                      <input 
+                        type="text" 
+                        className="input input-bordered w-full text-sm border rounded-lg px-2" 
+                        placeholder="Ketik judul atau ISBN..."
+                        value={bookSearch}
+                        onChange={(e) => { setBookSearch(e.target.value); setSelectedBook(null); }}
+                      />
+                    </label>
+                    {bookSearch && !selectedBook && (
+                      <div className="absolute left-0 right-0 z-20 mt-1 max-h-40 overflow-y-auto border rounded-lg bg-base-100 shadow">
+                        {filteredBookOptions.map(b => (
+                          <button key={b.book_id} className="w-full text-left px-3 py-2 hover:bg-base-200" onClick={() => setSelectedBook(b)}>
+                            <div className="font-medium text-sm">{b.title}</div>
+                            <div className="text-xs text-base-content/60">{b.isbn} · Stok: {b.stock_qty}</div>
+                          </button>
+                        ))}
+                        {filteredBookOptions.length === 0 && (
+                          <div className="px-3 py-2 text-sm text-base-content/60">Tidak ada hasil</div>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  <div>
-                    <div className="text-base-content/70 mb-2 text-sm font-bold">ISBN</div>
-                    <div className="text-base-content/70 text-sm">{selectedBook.isbn}</div>
-                  </div>
-                  <div>
-                    <div className="text-base-content/70 mb-2 text-sm font-bold">Harga Satuan</div>
-                    <div className="font-medium">{formatRupiah(selectedBook.selling_price)}</div>
-                  </div>
-                  <div>
-                    <div className="text-base-content/70 mb-2 text-sm font-bold">Subtotal</div>
-                    <div className="font-bold text-primary">{formatRupiah(selectedBook.selling_price * Math.max(1, parseInt(quantity || '1', 10)))}</div>
+                  <div className="md:col-span-1">
+                    <label className="form-control w-full">
+                      <div className="label"><span className="label-text text-sm font-bold">Jumlah</span></div>
+                      <input 
+                        type="number" 
+                        min={1} 
+                        className="input input-bordered w-full text-sm border rounded-lg px-2" 
+                        value={quantity} 
+                        onChange={(e) => setQuantity(e.target.value)}
+                        onBlur={() => {
+                          const v = parseInt(quantity || '1', 10);
+                          setQuantity(String(Math.max(1, isNaN(v) ? 1 : v)));
+                        }}
+                      />
+                    </label>
                   </div>
                 </div>
-                <div className="mt-6">
-                  <button className="btn btn-sm bg-primary-crm text-white font-medium px-3 rounded-lg" onClick={addItemToDraft}>Tambah ke Daftar</button>
+
+                {selectedBook && (
+                  <div className="mb-4 p-3 rounded-lg border border-base-200 bg-gray-50 text-sm">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      <div>
+                        <div className="text-base-content/70 mb-2 text-sm font-bold">Judul</div>
+                        <div className="text-sm line-clamp-2">{selectedBook.title}</div>
+                      </div>
+                      <div>
+                        <div className="text-base-content/70 mb-2 text-sm font-bold">ISBN</div>
+                        <div className="text-base-content/70 text-sm">{selectedBook.isbn}</div>
+                      </div>
+                      <div>
+                        <div className="text-base-content/70 mb-2 text-sm font-bold">Harga Satuan</div>
+                        <div className="font-medium">{formatRupiah(selectedBook.selling_price)}</div>
+                      </div>
+                      <div>
+                        <div className="text-base-content/70 mb-2 text-sm font-bold">Subtotal</div>
+                        <div className="font-bold text-primary">{formatRupiah(selectedBook.selling_price * Math.max(1, parseInt(quantity || '1', 10)))}</div>
+                      </div>
+                    </div>
+                    <div className="mt-6">
+                      <button className="btn btn-sm bg-primary-crm text-white font-medium px-3 rounded-lg" onClick={addItemToDraft}>Tambah ke Daftar</button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Form Pilih Bundle */}
+            {itemType === 'bundle' && (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+                  <div className="md:col-span-3 relative">
+                    <label className="form-control w-full">
+                      <div className="label"><span className="label-text text-sm font-bold">Cari Bundle</span></div>
+                      <input 
+                        type="text" 
+                        className="input input-bordered w-full text-sm border rounded-lg px-2" 
+                        placeholder="Ketik nama bundle..."
+                        value={bundleSearch}
+                        onChange={(e) => { setBundleSearch(e.target.value); setSelectedBundle(null); }}
+                      />
+                    </label>
+                    {bundleSearch && !selectedBundle && (
+                      <div className="absolute left-0 right-0 z-20 mt-1 max-h-40 overflow-y-auto border rounded-lg bg-base-100 shadow">
+                        {filteredBundleOptions.map(b => (
+                          <button key={b.bundle_id} className="w-full text-left px-3 py-2 hover:bg-base-200" onClick={() => setSelectedBundle(b)}>
+                            <div className="font-medium text-sm">{b.bundle_name}</div>
+                            <div className="text-xs text-base-content/60">{formatRupiah(b.selling_price)} · Stok: {b.stock}</div>
+                          </button>
+                        ))}
+                        {filteredBundleOptions.length === 0 && (
+                          <div className="px-3 py-2 text-sm text-base-content/60">Tidak ada bundle</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div className="md:col-span-1">
+                    <label className="form-control w-full">
+                      <div className="label"><span className="label-text text-sm font-bold">Jumlah</span></div>
+                      <input 
+                        type="number" 
+                        min={1} 
+                        className="input input-bordered w-full text-sm border rounded-lg px-2" 
+                        value={bundleQuantity} 
+                        onChange={(e) => setBundleQuantity(e.target.value)}
+                        onBlur={() => {
+                          const v = parseInt(bundleQuantity || '1', 10);
+                          setBundleQuantity(String(Math.max(1, isNaN(v) ? 1 : v)));
+                        }}
+                      />
+                    </label>
+                  </div>
                 </div>
-              </div>
+
+                {selectedBundle && (
+                  <div className="mb-4 p-3 rounded-lg border border-purple-200 bg-purple-50 text-sm">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      <div className="md:col-span-2">
+                        <div className="text-base-content/70 mb-2 text-sm font-bold">Nama Bundle</div>
+                        <div className="text-sm line-clamp-2">{selectedBundle.bundle_name}</div>
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {selectedBundle.items?.map((item, i) => (
+                            <span key={i} className="text-xs px-2 py-1 bg-white rounded border">{item.title} (x{item.quantity})</span>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-base-content/70 mb-2 text-sm font-bold">Harga Bundle</div>
+                        <div className="font-medium">{formatRupiah(selectedBundle.selling_price)}</div>
+                      </div>
+                      <div>
+                        <div className="text-base-content/70 mb-2 text-sm font-bold">Subtotal</div>
+                        <div className="font-bold text-purple-600">{formatRupiah(selectedBundle.selling_price * Math.max(1, parseInt(bundleQuantity || '1', 10)))}</div>
+                      </div>
+                    </div>
+                    <div className="mt-6">
+                      <button className="btn btn-sm bg-purple-600 hover:bg-purple-700 text-white font-medium px-3 rounded-lg" onClick={addBundleToDraft}>Tambah Bundle ke Daftar</button>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
 
             <div className="mb-4">
@@ -461,8 +742,8 @@ const TransactionPage = () => {
                   <thead className="sticky top-0 bg-black-gray-50">
                     <tr>
                       <th>No</th>
-                      <th>ISBN</th>
-                      <th>Judul</th>
+                      <th>Tipe</th>
+                      <th>Nama</th>
                       <th>Qty</th>
                       <th>Harga</th>
                       <th>Subtotal</th>
@@ -470,24 +751,39 @@ const TransactionPage = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {draftItems.length === 0 ? (
+                    {draftItems.length === 0 && draftBundles.length === 0 ? (
                       <tr>
                         <td colSpan={7} className="text-center p-4 text-base-content/60">Belum ada item</td>
                       </tr>
                     ) : (
-                      draftItems.map((it, i) => (
-                        <tr key={it.book_id}>
-                          <td>{i + 1}</td>
-                          <td>{it.isbn}</td>
-                          <td className="max-w-[260px] truncate" title={it.title}>{it.title}</td>
-                          <td>{it.quantity}</td>
-                          <td>{formatRupiah(it.unit_price)}</td>
-                          <td className="font-semibold">{formatRupiah(it.total)}</td>
-                          <td>
-                            <button className="btn btn-sm border rounded-lg px-2" onClick={() => removeDraftItem(it.book_id)}>Hapus</button>
-                          </td>
-                        </tr>
-                      ))
+                      <>
+                        {draftItems.map((it, i) => (
+                          <tr key={`book-${it.book_id}`}>
+                            <td>{i + 1}</td>
+                            <td><span className="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded">Buku</span></td>
+                            <td className="max-w-[260px] truncate" title={it.title}>{it.title}</td>
+                            <td>{it.quantity}</td>
+                            <td>{formatRupiah(it.unit_price)}</td>
+                            <td className="font-semibold">{formatRupiah(it.total)}</td>
+                            <td>
+                              <button className="btn btn-sm border rounded-lg px-2" onClick={() => removeDraftItem(it.book_id)}>Hapus</button>
+                            </td>
+                          </tr>
+                        ))}
+                        {draftBundles.map((it, i) => (
+                          <tr key={`bundle-${it.bundle_id}`} className="bg-purple-50">
+                            <td>{draftItems.length + i + 1}</td>
+                            <td><span className="text-xs px-2 py-1 bg-purple-100 text-purple-700 rounded">Bundle</span></td>
+                            <td className="max-w-[260px] truncate" title={it.bundle_name}>{it.bundle_name}</td>
+                            <td>{it.quantity}</td>
+                            <td>{formatRupiah(it.unit_price)}</td>
+                            <td className="font-semibold text-purple-700">{formatRupiah(it.total)}</td>
+                            <td>
+                              <button className="btn btn-sm border rounded-lg px-2" onClick={() => removeDraftBundle(it.bundle_id)}>Hapus</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </>
                     )}
                   </tbody>
                 </table>
@@ -501,7 +797,7 @@ const TransactionPage = () => {
             </div>
             <div className="modal-action shrink-0">
               <button className="btn border rounded-lg px-3" onClick={closeModal} disabled={submitting}>Batal</button>
-              <button className="btn bg-primary-crm rounded-lg px-3 text-sm text-white font-medium" onClick={submitDraft} disabled={submitting || draftItems.length === 0}>
+              <button className="btn bg-primary-crm rounded-lg px-3 text-sm text-white font-medium" onClick={submitDraft} disabled={submitting || (draftItems.length === 0 && draftBundles.length === 0)}>
                 {submitting ? <span className="loading loading-spinner"></span> : 'Simpan Transaksi'}
               </button>
             </div>

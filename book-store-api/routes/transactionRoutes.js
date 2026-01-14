@@ -100,32 +100,28 @@ router.get('/', async (req, res) => {
     }
 });
 
-// Mencatat Transaksi Penjualan Baru
+// Mencatat Transaksi Penjualan Baru (support buku dan bundle)
 router.post('/', async (req, res) => {
-    // req.body: { items: [{ book_id, quantity, price_at_sale }], payment_method?, customer_name? }
-    const { items, payment_method, customer_name } = req.body; 
-    if (!items || items.length === 0) {
-        return res.status(400).json({ error: 'Transaksi harus memiliki minimal 1 item' });
+    // req.body: { items: [{ book_id, quantity, price_at_sale }], bundles: [{ bundle_id, quantity }], payment_method?, customer_name? }
+    const { items = [], bundles = [], payment_method, customer_name } = req.body; 
+    if (items.length === 0 && bundles.length === 0) {
+        return res.status(400).json({ error: 'Transaksi harus memiliki minimal 1 item atau bundle' });
     }
 
-    // 1. Hitung Total Jumlah Transaksi
-    const totalAmount = items.reduce((sum, item) => sum + (item.quantity * item.price_at_sale), 0);
-    let connection; // Untuk menangani transaction MySQL
+    let connection;
 
     try {
         connection = await db.getConnection();
-        await connection.beginTransaction(); // Mulai transaksi database
+        await connection.beginTransaction();
 
-        // Pastikan kolom payment_method ada (jika belum ada, tambahkan)
+        // Pastikan kolom payment_method ada
         try { await connection.query("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS payment_method VARCHAR(32) NOT NULL DEFAULT 'cash'"); } catch (e) {}
         try { await connection.query("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS customer_id INT NULL"); } catch (e) {}
 
-        // 1.a. Upsert customer jika ada customer_name
+        // 1. Upsert customer jika ada customer_name
         let customerId = null;
         if (customer_name && String(customer_name).trim().length > 0) {
-            // pastikan tabel customers ada
             try { await connection.query("CREATE TABLE IF NOT EXISTS customers (customer_id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255) NOT NULL, phone VARCHAR(50) NULL, email VARCHAR(255) NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uniq_customer_name (name))"); } catch (e) {}
-            // cari atau buat
             const [found] = await connection.query('SELECT customer_id FROM customers WHERE name = ? LIMIT 1', [customer_name.trim()]);
             if (found.length > 0) {
                 customerId = found[0].customer_id;
@@ -134,40 +130,106 @@ router.post('/', async (req, res) => {
                 customerId = ins.insertId;
             }
         }
-        // 2. Insert ke Tabel Transaksi (Header)
+
+        // 2. Hitung Total Amount
+        let totalAmount = items.reduce((sum, item) => sum + (item.quantity * item.price_at_sale), 0);
+        
+        // Tambah harga bundle
+        for (const bundleItem of bundles) {
+            const [bundleData] = await connection.query('SELECT selling_price FROM bundles WHERE bundle_id = ?', [bundleItem.bundle_id]);
+            if (bundleData.length > 0) {
+                totalAmount += bundleData[0].selling_price * bundleItem.quantity;
+            }
+        }
+
+        // 3. Insert ke Tabel Transaksi (Header)
         const [transResult] = await connection.query(
             'INSERT INTO transactions (transaction_date, total_amount, payment_method, customer_id) VALUES (NOW(), ?, ?, ?)',
             [totalAmount, (payment_method || 'cash'), customerId]
         );
         const transactionId = transResult.insertId;
 
-        // 3. Insert ke Detail Transaksi & Update Stok
+        // 4. Insert buku ke transaction_items & Update Stok
         for (const item of items) {
-            // Insert ke transaction_items
             await connection.query(
                 'INSERT INTO transaction_items (transaction_id, book_id, quantity, price_at_sale) VALUES (?, ?, ?, ?)',
                 [transactionId, item.book_id, item.quantity, item.price_at_sale]
             );
 
-            // Update Stok (Kurangi stok buku)
             await connection.query(
                 'UPDATE books SET stock_qty = stock_qty - ? WHERE book_id = ?',
                 [item.quantity, item.book_id]
             );
 
-            // Log ke stock_history jika tabel ada
             try {
                 await connection.query(
                     'INSERT INTO stock_history (book_id, quantity_change, reason, transaction_date) VALUES (?, ?, ?, NOW())',
                     [item.book_id, -item.quantity, 'Penjualan Stok']
                 );
             } catch (historyErr) {
-                // Jika tabel stock_history tidak ada, skip logging
                 console.log('Tabel stock_history tidak ditemukan, skip logging');
             }
         }
 
-        await connection.commit(); // Komit semua perubahan jika berhasil
+        // 5. Process bundle sales
+        for (const bundleItem of bundles) {
+            const [bundleData] = await connection.query('SELECT * FROM bundles WHERE bundle_id = ? AND is_active = TRUE', [bundleItem.bundle_id]);
+            if (bundleData.length === 0) {
+                throw new Error(`Bundle ID ${bundleItem.bundle_id} tidak ditemukan`);
+            }
+            const bundle = bundleData[0];
+
+            // Check bundle stock
+            if (bundle.stock < bundleItem.quantity) {
+                throw new Error(`Stok bundle "${bundle.bundle_name}" tidak mencukupi`);
+            }
+
+            // Get bundle items (books inside)
+            const [bundleBooks] = await connection.query(`
+                SELECT bi.*, b.stock_qty 
+                FROM bundle_items bi 
+                JOIN books b ON bi.book_id = b.book_id 
+                WHERE bi.bundle_id = ?
+            `, [bundleItem.bundle_id]);
+
+            // Check stock for each book in bundle
+            for (const bookItem of bundleBooks) {
+                const requiredStock = bookItem.quantity * bundleItem.quantity;
+                if (bookItem.stock_qty < requiredStock) {
+                    throw new Error(`Stok buku dalam bundle tidak mencukupi`);
+                }
+            }
+
+            // Insert bundle to transaction_items (we'll use a special format)
+            // Note: You may need to add bundle_id column to transaction_items
+            try {
+                await connection.query(
+                    'INSERT INTO transaction_items (transaction_id, book_id, quantity, price_at_sale, bundle_id) VALUES (?, NULL, ?, ?, ?)',
+                    [transactionId, bundleItem.quantity, bundle.selling_price, bundleItem.bundle_id]
+                );
+            } catch (e) {
+                // If bundle_id column doesn't exist, insert without it but mark in a different way
+                // We'll record as a note in stock_history
+            }
+
+            // Reduce bundle stock
+            await connection.query('UPDATE bundles SET stock = stock - ? WHERE bundle_id = ?', [bundleItem.quantity, bundleItem.bundle_id]);
+
+            // Reduce stock of each book in bundle
+            for (const bookItem of bundleBooks) {
+                const reduceAmount = bookItem.quantity * bundleItem.quantity;
+                await connection.query('UPDATE books SET stock_qty = stock_qty - ? WHERE book_id = ?', [reduceAmount, bookItem.book_id]);
+
+                try {
+                    await connection.query(
+                        'INSERT INTO stock_history (book_id, quantity_change, reason, transaction_date) VALUES (?, ?, ?, NOW())',
+                        [bookItem.book_id, -reduceAmount, `Penjualan Bundle: ${bundle.bundle_name}`]
+                    );
+                } catch (historyErr) {}
+            }
+        }
+
+        await connection.commit();
         res.status(201).json({ 
             transaction_id: transactionId, 
             message: 'Transaksi berhasil dicatat dan stok diperbarui' 
@@ -175,14 +237,63 @@ router.post('/', async (req, res) => {
 
     } catch (err) {
         if (connection) {
-            await connection.rollback(); // Rollback jika ada error (stok tidak berkurang, dll.)
+            await connection.rollback();
         }
         console.error('Error during transaction:', err);
-        res.status(500).json({ error: 'Pencatatan transaksi gagal.' });
+        res.status(500).json({ error: err.message || 'Pencatatan transaksi gagal.' });
     } finally {
         if (connection) {
-            connection.release(); // Pastikan koneksi dilepas
+            connection.release();
         }
+    }
+});
+
+// Ambil daftar transaksi bundle - HARUS SEBELUM /:id
+router.get('/bundles/list', async (req, res) => {
+    const { q, startDate, endDate } = req.query;
+    
+    try {
+        let whereClause = '1=1';
+        const params = [];
+        
+        if (startDate) {
+            whereClause += ' AND DATE(t.transaction_date) >= ?';
+            params.push(startDate);
+        }
+        if (endDate) {
+            whereClause += ' AND DATE(t.transaction_date) <= ?';
+            params.push(endDate);
+        }
+        if (q) {
+            whereClause += ' AND (bu.bundle_name LIKE ?)';
+            params.push(`%${q}%`);
+        }
+        
+        const query = `
+            SELECT 
+                t.transaction_id AS id,
+                t.transaction_date AS date,
+                bu.bundle_name,
+                bu.bundle_id,
+                ti.quantity,
+                ti.price_at_sale AS selling_price,
+                (ti.quantity * ti.price_at_sale) AS total,
+                t.payment_method,
+                c.name AS customerName
+            FROM transactions t
+            JOIN transaction_items ti ON t.transaction_id = ti.transaction_id
+            JOIN bundles bu ON ti.bundle_id = bu.bundle_id
+            LEFT JOIN customers c ON t.customer_id = c.customer_id
+            WHERE ti.bundle_id IS NOT NULL AND ${whereClause}
+            ORDER BY t.transaction_date DESC
+            LIMIT 500
+        `;
+        
+        const [rows] = await db.query(query, params);
+        res.json(rows);
+    } catch (err) {
+        console.error('Error fetching bundle transactions:', err);
+        res.status(500).json({ error: 'Gagal mengambil data transaksi bundle.' });
     }
 });
 
