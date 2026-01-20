@@ -309,6 +309,7 @@ router.get('/:id', async (req, res) => {
                 t.transaction_date,
                 t.total_amount,
                 t.payment_method,
+                t.order_number,
                 c.name as customer_name,
                 c.customer_id
             FROM transactions t
@@ -375,6 +376,7 @@ router.get('/:id', async (req, res) => {
 
         const response = {
             transaction_id: transaction.transaction_id,
+            order_number: transaction.order_number,
             transaction_date: transaction.transaction_date,
             total_amount: transaction.total_amount,
             payment_method: transaction.payment_method,

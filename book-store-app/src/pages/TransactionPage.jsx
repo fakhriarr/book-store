@@ -62,6 +62,13 @@ const TransactionPage = () => {
   const [transactionDetail, setTransactionDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
+  // Import modal state
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [importFile, setImportFile] = useState(null);
+  const [importPreview, setImportPreview] = useState(null);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importStep, setImportStep] = useState('upload'); // 'upload' | 'preview' | 'success'
+
   const draftTotal = useMemo(() => {
     const bookTotal = draftItems.reduce((sum, it) => sum + it.total, 0);
     const bundleTotal = draftBundles.reduce((sum, it) => sum + it.total, 0);
@@ -414,6 +421,98 @@ const TransactionPage = () => {
     if (el) el.close();
   };
 
+  // Fungsi untuk import data Excel
+  const openImportModal = () => {
+    setImportModalOpen(true);
+    setImportFile(null);
+    setImportPreview(null);
+    setImportStep('upload');
+    setError(null);
+    setTimeout(() => {
+      const el = document.getElementById('import_modal');
+      if (el) el.showModal();
+    }, 0);
+  };
+
+  const closeImportModal = () => {
+    setImportModalOpen(false);
+    setImportFile(null);
+    setImportPreview(null);
+    setImportStep('upload');
+    const el = document.getElementById('import_modal');
+    if (el) el.close();
+  };
+
+  const handleFileSelect = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setImportFile(file);
+      setError(null);
+    }
+  };
+
+  const handlePreviewImport = async () => {
+    if (!importFile) {
+      setError('Pilih file Excel terlebih dahulu');
+      return;
+    }
+
+    setImportLoading(true);
+    setError(null);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', importFile);
+
+      const res = await axios.post(`${API_TRANS_URL}/import/preview`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+
+      setImportPreview(res.data);
+      setImportStep('preview');
+    } catch (err) {
+      console.error('Error previewing import:', err);
+      setError(err.response?.data?.error || 'Gagal memproses file Excel');
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
+  const handleConfirmImport = async () => {
+    if (!importPreview?.data) {
+      setError('Data preview tidak valid');
+      return;
+    }
+
+    setImportLoading(true);
+    setError(null);
+
+    try {
+      const res = await axios.post(`${API_TRANS_URL}/import/confirm`, {
+        data: importPreview.data
+      });
+
+      setImportStep('success');
+      setSuccessMessage(res.data.message);
+      
+      // Refresh transactions
+      await fetchTransactions();
+      await fetchBundleTransactions();
+      await fetchBooks();
+      await fetchBundles();
+
+      // Close modal after 2 seconds
+      setTimeout(() => {
+        closeImportModal();
+      }, 2000);
+    } catch (err) {
+      console.error('Error confirming import:', err);
+      setError(err.response?.data?.error || 'Gagal mengimpor data');
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
   return (
     <div className="max-w-7xl mx-auto w-full">
       <div className="flex items-start justify-between mb-6">
@@ -421,8 +520,8 @@ const TransactionPage = () => {
           <h2 className="text-4xl font-bold">Transaksi</h2>
         </div>
         <div className="flex gap-2">
-        <button className="btn btn-sm bg-green-600 text-white text-xs font-bold px-2 border-none rounded-lg" onClick={openModal}>
-          < Import className='w-4 h-4' /> Impor Data
+        <button className="btn btn-sm bg-green-600 text-white text-xs font-bold px-2 border-none rounded-lg" onClick={openImportModal}>
+          <Import className='w-4 h-4' /> Impor Data
         </button>
         <button className="btn btn-sm bg-primary-crm text-white text-xs font-bold px-2 border-none rounded-lg" onClick={openModal}>
           + Tambah Transaksi
@@ -946,6 +1045,15 @@ const TransactionPage = () => {
               <div className="flex-1 overflow-y-auto pr-1">
                 {/* Informasi Header Transaksi */}
                 <div className="bg-base-200 p-4 rounded-lg mb-4">
+                  <div className='mb-8'>
+                    {transactionDetail.order_number && (
+                        <div className="mt-1">
+                          <span className="text-sm px-4 py-2 bg-blue-50 text-blue-700 rounded-lg border border-blue-700">
+                            No. Pesanan: {transactionDetail.order_number}
+                          </span>
+                        </div>
+                      )}
+                  </div>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                     <div>
                       <div className="font-semibold text-base-content/70">ID Transaksi</div>
@@ -968,8 +1076,8 @@ const TransactionPage = () => {
                       </div>
                     </div>
                   </div>
-                  <div className="mt-4 pt-4 border-t border-base-300">
-                    <div className="flex justify-between items-center">
+                  <div className="mt-8 border-t border-gray-600">
+                    <div className="flex mt-4 justify-between items-center">
                       <div className="font-semibold text-base-content/70">Total Item</div>
                       <div className="font-bold text-lg text-primary">
                         {transactionDetail.items.reduce((sum, item) => sum + item.quantity, 0)} item
@@ -1072,6 +1180,187 @@ const TransactionPage = () => {
             <div className="modal-action shrink-0">
               <button className="btn border rounded-lg px-3" onClick={closeDetailModal}>Tutup</button>
             </div>
+          </div>
+        )}
+      </dialog>
+
+      {/* Modal Import Data */}
+      <dialog id="import_modal" className="modal">
+        {importModalOpen && (
+          <div className="modal-box w-11/12 max-w-5xl p-6 max-h-[85vh] overflow-hidden flex flex-col">
+            <div className="flex items-start justify-between mb-4 shrink-0">
+              <div>
+                <div className="font-bold text-lg">Impor Data Transaksi</div>
+                <p className="text-sm text-base-content/60">Import transaksi dari file Excel e-commerce</p>
+              </div>
+              <button className="btn btn-sm btn-ghost" onClick={closeImportModal}>✕</button>
+            </div>
+
+            {error && (
+              <div role="alert" className="alert alert-error shadow-lg mb-4 shrink-0">
+                <span>{error}</span>
+              </div>
+            )}
+
+            {/* Step 1: Upload File */}
+            {importStep === 'upload' && (
+              <div className="flex-1 flex flex-col">
+                <div className="border-2 border-dashed border-base-300 rounded-xl p-8 text-center flex-1 flex flex-col justify-center">
+                  <Import className="w-16 h-16 mx-auto text-base-content/40 mb-4" />
+                  <h3 className="text-lg font-semibold mb-2">Pilih File Excel</h3>
+                  <p className="text-sm text-base-content/60 mb-4">
+                    Format yang didukung: .xlsx, .xls (max 10MB)
+                  </p>
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={handleFileSelect}
+                    className="file-input file-input-bordered w-full max-w-md mx-auto"
+                  />
+                  {importFile && (
+                    <div className="mt-4 p-3 bg-green-50 rounded-lg border border-green-200">
+                      <p className="text-sm text-green-700">
+                        ✓ File dipilih: <strong>{importFile.name}</strong>
+                      </p>
+                    </div>
+                  )}
+                </div>
+                <div className="modal-action shrink-0 mt-4">
+                  <button className="btn border rounded-lg px-4" onClick={closeImportModal}>Batal</button>
+                  <button 
+                    className="btn bg-primary-crm text-white rounded-lg px-4"
+                    onClick={handlePreviewImport}
+                    disabled={!importFile || importLoading}
+                  >
+                    {importLoading ? <span className="loading loading-spinner loading-sm"></span> : 'Preview Data'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Step 2: Preview Data */}
+            {importStep === 'preview' && importPreview && (
+              <div className="flex-1 flex flex-col overflow-hidden">
+                {/* Summary */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 shrink-0">
+                  <div className="stat bg-blue-50 rounded-lg p-3">
+                    <div className="stat-title text-xs">Total Pesanan</div>
+                    <div className="stat-value text-xl text-blue-600">{importPreview.summary.totalOrders}</div>
+                  </div>
+                  <div className="stat bg-green-50 rounded-lg p-3">
+                    <div className="stat-title text-xs">Pesanan Baru</div>
+                    <div className="stat-value text-xl text-green-600">{importPreview.summary.newOrders}</div>
+                  </div>
+                  <div className="stat bg-orange-50 rounded-lg p-3">
+                    <div className="stat-title text-xs">Akan Di-replace</div>
+                    <div className="stat-value text-xl text-orange-600">{importPreview.summary.replaceOrders}</div>
+                  </div>
+                  <div className="stat bg-purple-50 rounded-lg p-3">
+                    <div className="stat-title text-xs">Total Item</div>
+                    <div className="stat-value text-xl text-purple-600">{importPreview.summary.totalItems}</div>
+                  </div>
+                </div>
+
+                {/* Warnings */}
+                {importPreview.warnings.length > 0 && (
+                  <div className="mb-4 shrink-0 space-y-2">
+                    {importPreview.warnings.map((warn, idx) => (
+                      <div key={idx} className={`p-3 rounded-lg border ${
+                        warn.type === 'unmatched' ? 'bg-amber-50 border-amber-200' : 'bg-orange-50 border-orange-200'
+                      }`}>
+                        <p className="text-sm font-medium">{warn.message}</p>
+                        {warn.items && warn.items.length > 0 && (
+                          <details className="mt-2">
+                            <summary className="text-xs cursor-pointer text-amber-700">Lihat detail ({warn.items.length} item)</summary>
+                            <ul className="text-xs mt-1 ml-4 list-disc">
+                              {warn.items.slice(0, 10).map((item, i) => (
+                                <li key={i}>{item.productName} ({item.type})</li>
+                              ))}
+                              {warn.items.length > 10 && <li>...dan {warn.items.length - 10} lainnya</li>}
+                            </ul>
+                          </details>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Preview Table */}
+                <div className="flex-1 overflow-y-auto border rounded-lg">
+                  <table className="table table-zebra table-sm w-full">
+                    <thead className="sticky top-0 bg-gray-100">
+                      <tr>
+                        <th>No. Pesanan</th>
+                        <th>Tanggal</th>
+                        <th>Customer</th>
+                        <th>Metode</th>
+                        <th>Item</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importPreview.data.map((order, idx) => (
+                        <tr key={idx} className={order.isExisting ? 'bg-orange-50' : ''}>
+                          <td className="font-mono text-xs">{order.orderNumber}</td>
+                          <td className="text-xs">{new Date(order.date).toLocaleString('id-ID')}</td>
+                          <td className="text-xs">{order.customerName || '-'}</td>
+                          <td className="text-xs">
+                            {{ cash: 'Tunai', qris: 'QRIS', transfer: 'Transfer', debit: 'Debit' }[order.paymentMethod] || order.paymentMethod}
+                          </td>
+                          <td>
+                            <div className="flex flex-wrap gap-1">
+                              {order.items.map((item, i) => (
+                                <span 
+                                  key={i} 
+                                  className={`text-xs px-2 py-0.5 rounded ${
+                                    item.matched 
+                                      ? item.type === 'bundle' 
+                                        ? 'bg-purple-100 text-purple-700' 
+                                        : 'bg-blue-100 text-blue-700'
+                                      : 'bg-red-100 text-red-700'
+                                  }`}
+                                  title={item.matched ? `Match: ${item.matchedData?.matchScore}%` : 'Tidak ditemukan di database'}
+                                >
+                                  {item.type === 'bundle' ? '📦' : '📚'} {item.productName.substring(0, 25)}...
+                                  {item.matched && <span className="ml-1 text-green-600">✓</span>}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                          <td>
+                            {order.isExisting ? (
+                              <span className="text-xs px-2 py-1 bg-orange-100 text-orange-700 rounded">Replace</span>
+                            ) : (
+                              <span className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded">Baru</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="modal-action shrink-0 mt-4">
+                  <button className="btn border rounded-lg px-4" onClick={() => setImportStep('upload')}>Kembali</button>
+                  <button 
+                    className="btn bg-green-600 text-white rounded-lg px-4"
+                    onClick={handleConfirmImport}
+                    disabled={importLoading}
+                  >
+                    {importLoading ? <span className="loading loading-spinner loading-sm"></span> : `Impor ${importPreview.summary.totalOrders} Transaksi`}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Step 3: Success */}
+            {importStep === 'success' && (
+              <div className="flex-1 flex flex-col items-center justify-center py-8">
+                <div className="text-6xl mb-4">✅</div>
+                <h3 className="text-xl font-bold text-green-600 mb-2">Import Berhasil!</h3>
+                <p className="text-base-content/60">{successMessage}</p>
+              </div>
+            )}
           </div>
         )}
       </dialog>
